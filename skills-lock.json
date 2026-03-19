@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "agent-guardrails": {
+      "source": "laundromatic/agent-guardrails",
+      "sourceType": "github",
+      "computedHash": "43cf262f5e6a5edb3c6a24680a6a4cc3fbb123a0ae77207a4ee51904a257f5a5"
+    }
+  }
+}

@@ -1,57 +1,89 @@
 # agent-guardrails
 
-Battle-tested hooks and rules for AI coding agents. Enforcement gates that block bad patterns — not suggestions agents can ignore.
+Shell-script hooks that block bad AI agent behavior at the tool level. Memory overflow protection, instant type checking, test enforcement, and evidence-based completion.
 
 [![Install with skills CLI](https://img.shields.io/badge/install-npx%20skills%20add-blue)](https://skills.sh)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-
-## Why This Exists
-
-Every guardrail in this package was created because something broke in production:
-
-| Incident | Cost | Guardrail Created |
-|----------|------|-------------------|
-| Feature shipped without any tests | Broke in production, required hotfix | **TDD Guard** — blocks edits to files without tests |
-| Agent said "done" but only disabled a workflow node, not the workflow | $10,000 in wasted API executions | **Verify Before Done** — requires evidence before completion claims |
-| Tests passed but TypeScript had type errors | Multiple follow-up commits to fix CI | **Typecheck on Edit** — runs tsc after every edit |
-| Agent context file grew past truncation limit | Lost critical project decisions | **Memory Guard** — blocks writes exceeding line limit |
-
-## Install
 
 ```bash
 npx skills add laundromatic/agent-guardrails
 ```
 
-Works with Claude Code, Cursor, Windsurf, Codex, and 18+ other AI coding agents.
+## The Problem
+
+AI coding agents are optimistic. They say "done" without evidence, skip type checks, edit files that have no tests, and let context files grow past system truncation limits. Most skills address this with instructions — but instructions are suggestions the agent can forget or ignore mid-task.
+
+## The Solution
+
+Shell-script hooks with hard exit codes. The agent **cannot proceed** until the condition is met.
+
+## Why These Exist
+
+Every guardrail was created after a real production incident:
+
+| Incident | What Happened | Cost | Guardrail |
+|----------|--------------|------|-----------|
+| Context overflow | Agent memory file grew past 200-line system truncation limit | Lost critical project decisions across sessions | **Memory Guard** |
+| Silent type errors | Tests passed, CI failed on TypeScript errors | Multiple follow-up commits | **Typecheck on Edit** |
+| Untested feature | 6-ticket feature shipped without a single test | Production regression | **TDD Guard** |
+| False completion | Agent said "disabled workflow" — only disabled a node | $10,000 in wasted API executions | **Verify Before Done** |
 
 ## Components
 
-### Hooks
+### Memory Guard (`hooks/memory-guard/`)
 
-**TDD Guard** (`hooks/tdd-guard/`) — PreToolUse hook that blocks edits to source files lacking a corresponding test file. Exit code 2 = hard block. Configurable test file patterns. Skips test files, type declarations, CSS, page components, and UI library primitives.
+**PreToolUse hook — BLOCKS writes exceeding line limit**
 
-**Typecheck on Edit** (`hooks/typecheck-on-edit/`) — PostToolUse hook that runs `tsc --noEmit` after every TypeScript file edit. Surfaces type errors immediately instead of waiting for CI. Informational (doesn't block).
+AI agents maintain context in memory files. These files have system-level truncation limits — content past the limit is silently invisible to future sessions. This hook blocks writes before they cross the safety threshold.
 
-**Memory Guard** (`hooks/memory-guard/`) — PreToolUse hook that blocks writes to memory index files exceeding a configurable line limit (default: 150). Prevents context loss from file truncation.
+- Configurable line limit (default: 150)
+- Configurable file name to protect (default: `MEMORY.md`)
+- Forces the agent to refactor: move detail to topic files, keep the index lean
 
-### Skills
+### Typecheck on Edit (`hooks/typecheck-on-edit/`)
 
-**Verify Before Done** (`skills/verify-before-done/`) — Instructs the agent to never claim "done", "fixed", or "complete" without verifiable evidence. Requires test output, API response, or screenshot comparison. If verification isn't possible, the agent must say "UNVERIFIED — requires manual confirmation."
+**PostToolUse hook — runs tsc after every TypeScript edit**
 
-### Rules
+Catches type errors the moment they're introduced instead of waiting for CI. Shows the first N lines of errors immediately after each edit.
 
-**Evidence-Based Completion** (`rules/evidence-based-completion.md`) — Rule template for CLAUDE.md that enforces evidence-based completion claims across all work.
+- Configurable error output limit (default: 15 lines)
+- Skips test files, config files, type declarations
+- Informational — doesn't block, but surfaces errors proactively
 
-**Plan vs Reality** (`rules/plan-vs-reality.md`) — Rule template that establishes a hierarchy when plan documents conflict with what was actually built. Session notes and code reflect reality; plan documents reflect intentions.
+### TDD Guard (`hooks/tdd-guard/`)
+
+**PreToolUse hook — BLOCKS edits to files without tests**
+
+A lightweight test-file existence check. If the source file has no corresponding test file, the edit is blocked.
+
+- Configurable source directory, skip patterns, test naming convention
+- Skips pages, layouts, CSS, type declarations, UI library primitives
+
+> For full TDD workflow enforcement (red-green-refactor with test reporters for Vitest, Jest, pytest, Go, Rust, etc.), see [nizos/tdd-guard](https://github.com/nizos/tdd-guard) (1.9K stars).
+
+### Verify Before Done (`skills/verify-before-done/`)
+
+**Skill — requires evidence before completion claims**
+
+Instructs the agent to never say "done", "fixed", or "complete" without verifiable evidence. Includes a concrete evidence table mapping change types to required proof.
+
+> For a complementary instructional approach, see [obra/superpowers verification-before-completion](https://github.com/obra/superpowers) (21K installs).
+
+### Rules (`rules/`)
+
+CLAUDE.md templates you can drop into any project:
+
+- **evidence-based-completion.md** — "Never say done without test output or verification"
+- **plan-vs-reality.md** — Establishes a document hierarchy for when plan docs conflict with what was actually built. Session notes and code reflect reality; plans reflect intentions.
 
 ## How Hooks Work
 
-Claude Code (and compatible agents) support hooks that run shell scripts at specific points:
+Claude Code and compatible agents support hooks at specific lifecycle points:
 
-- **PreToolUse**: Runs before the agent uses a tool (Edit, Write, etc.). Exit code 2 blocks the action with an error message.
-- **PostToolUse**: Runs after the agent uses a tool. Cannot block, but can surface information.
+- **PreToolUse**: Runs before the agent uses a tool. **Exit code 2 blocks the action** with an error message.
+- **PostToolUse**: Runs after the agent uses a tool. Cannot block, but surfaces information.
 
-These hooks are configured in `.claude/settings.json` or `.claude/settings.local.json`:
+Configure in `.claude/settings.json`:
 
 ```json
 {
@@ -60,6 +92,10 @@ These hooks are configured in `.claude/settings.json` or `.claude/settings.local
       {
         "matcher": "Edit|Write",
         "command": ".claude/hooks/tdd-guard/hook.sh"
+      },
+      {
+        "matcher": "Write",
+        "command": ".claude/hooks/memory-guard/hook.sh"
       }
     ],
     "PostToolUse": [
@@ -72,9 +108,9 @@ These hooks are configured in `.claude/settings.json` or `.claude/settings.local
 }
 ```
 
-## Customization
+## Works With
 
-Each hook has configurable variables at the top of `hook.sh`. See the SKILL.md in each hook's directory for details.
+Claude Code, Cursor, Codex, Copilot, Windsurf, Warp, Amp, Cline, Mistral Vibe, and other agents supporting the [skills.sh](https://skills.sh) ecosystem.
 
 ## License
 
@@ -82,4 +118,4 @@ Apache License 2.0
 
 ## Origin
 
-Extracted from [SceneInBloom](https://sceneinbloom.com), an AI-native commerce platform. These guardrails evolved over 70+ development sessions operating AI agents in production.
+Extracted from [SceneInBloom](https://sceneinbloom.com), an AI-native commerce platform built over 70+ development sessions with AI coding agents. Each guardrail maps to a specific production incident — not theory, but hard-won operational lessons.
